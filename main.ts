@@ -11,6 +11,15 @@ enum ControlPointType {
     LIGHT_DROP,
 }
 
+function mapMap<K,V>(map: Map<K,V>, f: (k: K, v: V) => V): Map<K,V> {
+    const entries = Array.from(map).map(([k, v]) => [k, f(k, v)]) as [K,V][];
+    return new Map<K,V>(entries);
+}
+
+function mapReplace<K,V>(map: Map<K,V>, replaceKey: K, f: (v: V) => V): Map<K,V> {
+    return mapMap(map, (k, v) => k === replaceKey ? f(v) : v);
+}
+
 class Point {
     public readonly x: number;
     public readonly y: number;
@@ -76,9 +85,19 @@ class Line {
     }
 
     public draw(g: CanvasRenderingContext2D): void {
+        const r = this.end.vectorFrom(this.begin);
+        let length = r.length();
+        if (length === 0) {
+            return;
+        }
+        const large = r.times(4000/length);
+
+        const p1 = this.stopAtBegin ? this.begin : this.begin.minus(large);
+        const p2 = this.stopAtEnd ? this.end : this.end.plus(large);
+
         g.beginPath();
-        g.moveTo(this.begin.x, this.begin.y);
-        g.lineTo(this.end.x, this.end.y);
+        g.moveTo(p1.x, p1.y);
+        g.lineTo(p2.x, p2.y);
         g.stroke();
     }
 
@@ -118,7 +137,7 @@ class Box {
 
         g.strokeStyle = STROKE_LIGHT;
         for (let i = 0; i < frontPoints.length; i++) {
-            const line = new Line(config.vanishingPoint, frontPoints[i], true, false);
+            const line = new Line(config.vanishingPoint, frontPoints[i], true, true);
             line.draw(g);
         }
 
@@ -136,6 +155,33 @@ class Box {
         for (let i = 0; i < 4; i++) {
             new Line(frontPoints[i], backPoints[i], true, true).draw(g);
         }
+
+        g.strokeStyle = STROKE_LIGHT;
+        const topPoints = [ frontPoints[1], backPoints[1], backPoints[2], frontPoints[2] ];
+        const bottomPoints = [ frontPoints[0], backPoints[0], backPoints[3], frontPoints[3] ];
+
+        const shadow: Point[] = [];
+        for (let i = 0; i < 4; i++) {
+            const top = topPoints[i];
+            const bottom = bottomPoints[i];
+
+            const lightLine = new Line(config.light, top, true, false);
+            lightLine.draw(g);
+
+            const lightDropLine = new Line(config.lightDrop, bottom, true, false);
+            lightDropLine.draw(g);
+
+            const p = lightLine.intersectWith(lightDropLine);
+            shadow.push(p);
+        }
+
+        g.strokeStyle = STROKE_DARK;
+        g.beginPath();
+        g.moveTo(shadow[3].x, shadow[3].y);
+        for (const p of shadow) {
+            g.lineTo(p.x, p.y);
+        }
+        g.stroke();
     }
 }
 
@@ -199,16 +245,14 @@ class ControlPoints {
     public moveTo(p: Point): ControlPoints {
         if (this.selected !== undefined && this.delta !== undefined) {
             const newPoint = new ControlPoint(p.minus(this.delta));
-            let newMap = ControlPoints.replace(this.points, this.selected, newPoint);
+            let newMap = mapReplace(this.points, this.selected, () => newPoint);
             if (this.selected === ControlPointType.LIGHT) {
                 // Move the drop too.
-                const oldPoint = newMap.get(ControlPointType.LIGHT_DROP) as ControlPoint;
-                newMap = ControlPoints.replace(newMap, ControlPointType.LIGHT_DROP, new ControlPoint(new Point(newPoint.x, oldPoint.y)));
+                newMap = mapReplace(newMap, ControlPointType.LIGHT_DROP, cp => new ControlPoint(new Point(newPoint.x, cp.y)));
             }
             if (this.selected === ControlPointType.LIGHT_DROP) {
                 // Move the light too.
-                const oldPoint = newMap.get(ControlPointType.LIGHT) as ControlPoint;
-                newMap = ControlPoints.replace(newMap, ControlPointType.LIGHT, new ControlPoint(new Point(newPoint.x, oldPoint.y)));
+                newMap = mapReplace(newMap, ControlPointType.LIGHT, cp => new ControlPoint(new Point(newPoint.x, cp.y)));
             }
 
             return new ControlPoints(newMap, this.selected, this.delta);
@@ -220,12 +264,6 @@ class ControlPoints {
     public deselect(): ControlPoints {
         return new ControlPoints(this.points, undefined, undefined);
     }
-
-    private static replace(points: Map<ControlPointType,ControlPoint>, newCpt: ControlPointType, newPoint: ControlPoint): Map<ControlPointType,ControlPoint> {
-        const newPoints = Array.from(points).map(
-            ([cpt, cp]) => [cpt, cpt === newCpt ? newPoint : cp]) as [ControlPointType,ControlPoint][];
-        return new Map<ControlPointType,ControlPoint>(newPoints);
-    }
 }
 
 class Config {
@@ -234,6 +272,8 @@ class Config {
     public readonly controlPoints: ControlPoints;
     public readonly vanishingPoint: Point;
     public readonly box: Box;
+    public readonly light: Point;
+    public readonly lightDrop: Point;
 
     constructor(width: number, height: number, controlPoints: ControlPoints) {
         this.width = width;
@@ -241,6 +281,8 @@ class Config {
         this.controlPoints = controlPoints;
         this.vanishingPoint = controlPoints.get(ControlPointType.VANISHING_POINT);
         this.box = new Box(controlPoints.get(ControlPointType.BOX_POINT_1), controlPoints.get(ControlPointType.BOX_POINT_2), 50);
+        this.light = controlPoints.get(ControlPointType.LIGHT);
+        this.lightDrop = controlPoints.get(ControlPointType.LIGHT_DROP);
     }
 
     public draw(g: CanvasRenderingContext2D): void {
