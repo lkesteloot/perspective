@@ -1,0 +1,15 @@
+{
+  "name": "perspective",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "Lawrence Kesteloot <lk@teamten.com> (https://www.teamten.com/lawrence/)",
+  "license": "MIT",
+  "devDependencies": {
+    "parcel": "^2.0.0"
+  }
+}
