@@ -1,4 +1,7 @@
+import rough from "roughjs";
+import {RoughCanvas} from "roughjs/bin/canvas";
 
+const BACKGROUND_COLOR = "#ccccbb";
 const STROKE_DARK = "#444400";
 const STROKE_LIGHT = "#aaaa88";
 const STROKE_HIGHLIGHT = "#AA4444";
@@ -20,6 +23,50 @@ function mapReplace<K,V>(map: Map<K,V>, replaceKey: K, f: (v: V) => V): Map<K,V>
     return mapMap(map, (k, v) => k === replaceKey ? f(v) : v);
 }
 
+function isOnLeftOf(p1: Point, p2: Point, p: Point): boolean {
+    if (p1 === p2 || p === p1 || p === p2) {
+        return false;
+    }
+
+    const a = p2.vectorFrom(p1);
+    const b = p.vectorFrom(p1);
+
+    return a.x*b.y - b.x*a.y > 0;
+}
+
+function convexHull(s: Point[]): Point[] {
+    if (s.length < 3) {
+        throw new Error("Convex hull needs at least three points");
+    }
+
+    // Start with left-most point.
+    let l = 0;
+    for (let i = 1; i < s.length; i++) {
+        if (s[i].x < s[l].x) {
+            l = i;
+        }
+    }
+
+    // https://en.wikipedia.org/wiki/Gift_wrapping_algorithm
+    let p = l;
+    const hull: Point[] = [];
+    let max = s.length + 1;
+    do {
+        hull.push(s[p]);
+        let q = (p + 1) % s.length;
+
+        for (let i = 0; i < s.length; i++) {
+            if (isOnLeftOf(s[p], s[q], s[i])) {
+                q = i;
+            }
+        }
+
+        p = q;
+    } while (p !== l && --max > 0);
+
+    return hull;
+}
+
 class Point {
     public readonly x: number;
     public readonly y: number;
@@ -29,10 +76,11 @@ class Point {
         this.y = y;
     }
 
-    public draw(g: CanvasRenderingContext2D, r: number): void {
-        g.beginPath();
-        g.arc(this.x, this.y, r, 0, Math.PI*2);
-        g.stroke();
+    public draw(g: CanvasRenderingContext2D, rc: RoughCanvas, r: number, selected: boolean): void {
+        rc.circle(this.x, this.y, r*2, {
+            stroke: selected ? STROKE_HIGHLIGHT : STROKE_LIGHT,
+            strokeWidth: selected ? 2 : 1,
+        });
     }
 
     public vectorFrom(other: Point): Vector {
@@ -49,7 +97,6 @@ class Point {
 }
 
 class Vector {
-    public static UP = new Vector(0, -100);
     public readonly x: number;
     public readonly y: number;
 
@@ -80,11 +127,7 @@ class Line {
         this.stopAtEnd = stopAtEnd;
     }
 
-    public static upFrom(p: Point): Line {
-        return new Line(p, p.plus(Vector.UP), true, true);
-    }
-
-    public draw(g: CanvasRenderingContext2D): void {
+    public draw(g: CanvasRenderingContext2D, rc: RoughCanvas, dark: boolean): void {
         const r = this.end.vectorFrom(this.begin);
         let length = r.length();
         if (length === 0) {
@@ -95,10 +138,10 @@ class Line {
         const p1 = this.stopAtBegin ? this.begin : this.begin.minus(large);
         const p2 = this.stopAtEnd ? this.end : this.end.plus(large);
 
-        g.beginPath();
-        g.moveTo(p1.x, p1.y);
-        g.lineTo(p2.x, p2.y);
-        g.stroke();
+        rc.line(p1.x, p1.y, p2.x, p2.y, {
+            stroke: dark ? STROKE_DARK : STROKE_LIGHT,
+            disableMultiStroke: !dark,
+        });
     }
 
     public intersectWith(other: Line): Point {
@@ -127,7 +170,7 @@ class Box {
         this.depth = depth;
     }
 
-    public draw(g: CanvasRenderingContext2D, config: Config) {
+    public draw(g: CanvasRenderingContext2D, rc: RoughCanvas, config: Config) {
         const frontPoints: Point[] = [
             this.p1,
             new Point(this.p1.x, this.p2.y),
@@ -135,53 +178,65 @@ class Box {
             new Point(this.p2.x, this.p1.y),
         ];
 
-        g.strokeStyle = STROKE_LIGHT;
-        for (let i = 0; i < frontPoints.length; i++) {
-            const line = new Line(config.vanishingPoint, frontPoints[i], true, true);
-            line.draw(g);
-        }
-
-        g.strokeStyle = STROKE_DARK;
-        for (let i = 0; i < frontPoints.length; i++) {
-            const line = new Line(frontPoints[i], frontPoints[(i + 1) % frontPoints.length], true, true);
-            line.draw(g);
-        }
-
         const backPoints = frontPoints.map(p => p.plus(config.vanishingPoint.vectorFrom(p).times(0.3)));
-        for (let i = 0; i < backPoints.length; i++) {
-            const line = new Line(backPoints[i], backPoints[(i + 1) % backPoints.length], true, true);
-            line.draw(g);
-        }
-        for (let i = 0; i < 4; i++) {
-            new Line(frontPoints[i], backPoints[i], true, true).draw(g);
-        }
-
-        g.strokeStyle = STROKE_LIGHT;
         const topPoints = [ frontPoints[1], backPoints[1], backPoints[2], frontPoints[2] ];
         const bottomPoints = [ frontPoints[0], backPoints[0], backPoints[3], frontPoints[3] ];
 
+        const lightLines: Line[] = [];
+        const lightDropLines: Line[] = [];
         const shadow: Point[] = [];
         for (let i = 0; i < 4; i++) {
             const top = topPoints[i];
             const bottom = bottomPoints[i];
 
             const lightLine = new Line(config.light, top, true, false);
-            lightLine.draw(g);
+            lightLines.push(lightLine);
 
             const lightDropLine = new Line(config.lightDrop, bottom, true, false);
-            lightDropLine.draw(g);
+            lightDropLines.push(lightDropLine);
 
-            const p = lightLine.intersectWith(lightDropLine);
-            shadow.push(p);
+            shadow.push(lightLine.intersectWith(lightDropLine));
         }
 
-        g.strokeStyle = STROKE_DARK;
-        g.beginPath();
-        g.moveTo(shadow[3].x, shadow[3].y);
-        for (const p of shadow) {
-            g.lineTo(p.x, p.y);
+        // Actual shadow.
+        const fullShadow = convexHull([... shadow, ... bottomPoints]);
+        rc.polygon(fullShadow.map(p => [p.x, p.y]), {
+            fill: "black",
+            fillStyle: "cross-hatch",
+        });
+
+        // Erase bottom box.
+        rc.polygon(bottomPoints.map(p => [p.x, p.y]), {
+            fill: BACKGROUND_COLOR,
+            fillStyle: "solid",
+        });
+
+        // Lines from vanishing point.
+        for (let i = 0; i < frontPoints.length; i++) {
+            const line = new Line(config.vanishingPoint, frontPoints[i], true, true);
+            line.draw(g, rc, false);
         }
-        g.stroke();
+
+        // Front rectangle.
+        for (let i = 0; i < frontPoints.length; i++) {
+            const line = new Line(frontPoints[i], frontPoints[(i + 1) % frontPoints.length], true, true);
+            line.draw(g, rc, true);
+        }
+
+        // Back rectangle.
+        for (let i = 0; i < backPoints.length; i++) {
+            const line = new Line(backPoints[i], backPoints[(i + 1) % backPoints.length], true, true);
+            line.draw(g, rc, true);
+        }
+
+        // Connect from to back rectangle.
+        for (let i = 0; i < 4; i++) {
+            new Line(frontPoints[i], backPoints[i], true, true).draw(g, rc, true);
+        }
+
+        // Shadow lines.
+        lightLines.forEach(line => line.draw(g, rc, false));
+        lightDropLines.forEach(line => line.draw(g, rc, false));
     }
 }
 
@@ -192,8 +247,8 @@ class ControlPoint extends Point {
         super(p.x, p.y);
     }
 
-    public draw(g: CanvasRenderingContext2D): void {
-        super.draw(g, ControlPoint.RADIUS);
+    public drawControlPoint(g: CanvasRenderingContext2D, rc: RoughCanvas, selected: boolean): void {
+        super.draw(g, rc, ControlPoint.RADIUS, selected);
     }
 
     public isClickedOn(p: Point): boolean {
@@ -221,15 +276,11 @@ class ControlPoints {
         return cp;
     }
 
-    public draw(g: CanvasRenderingContext2D): void {
-        g.save();
+    public draw(g: CanvasRenderingContext2D, rc: RoughCanvas): void {
         for (const [cpt, cp] of this.points.entries()) {
             const selected = cpt === this.selected;
-            g.strokeStyle = selected ? STROKE_HIGHLIGHT : STROKE_LIGHT;
-            g.lineWidth = selected ? 2 : 1;
-            cp.draw(g);
+            cp.drawControlPoint(g, rc, selected);
         }
-        g.restore();
     }
 
     public select(p: Point): ControlPoints {
@@ -285,29 +336,27 @@ class Config {
         this.lightDrop = controlPoints.get(ControlPointType.LIGHT_DROP);
     }
 
-    public draw(g: CanvasRenderingContext2D): void {
-        g.fillStyle = "#ccccbb";
+    public draw(g: CanvasRenderingContext2D, rc: RoughCanvas): void {
+        g.fillStyle = BACKGROUND_COLOR;
         g.fillRect(0, 0, this.width, this.height);
 
-        g.strokeStyle = STROKE_DARK;
-        g.beginPath();
-        g.moveTo(0, this.vanishingPoint.y);
-        g.lineTo(this.width, this.vanishingPoint.y);
-        g.stroke();
+        rc.line(0, this.vanishingPoint.y, this.width, this.vanishingPoint.y);
 
-        this.controlPoints.draw(g);
+        this.controlPoints.draw(g, rc);
 
-        this.box.draw(g, this);
+        this.box.draw(g, rc, this);
     }
 }
 
 function main() {
-    const width = window.innerWidth;
-    const height = window.innerHeight;
+    let width = window.innerWidth;
+    let height = window.innerHeight;
 
     const canvas = document.querySelector("canvas") as HTMLCanvasElement;
     canvas.width = width;
     canvas.height = height;
+
+    const rc = rough.canvas(canvas);
 
     const g = canvas.getContext("2d");
     if (g === null) {
@@ -319,34 +368,43 @@ function main() {
         [ControlPointType.VANISHING_POINT, new ControlPoint(new Point(width / 2, height / 2))],
 
         // Box.
-        [ControlPointType.BOX_POINT_1, new ControlPoint(new Point(width / 4, height / 2 + 200))],
-        [ControlPointType.BOX_POINT_2, new ControlPoint(new Point(width / 4 + 300, height / 2 - 300))],
+        [ControlPointType.BOX_POINT_1, new ControlPoint(new Point(width / 4, height / 2 + 300))],
+        [ControlPointType.BOX_POINT_2, new ControlPoint(new Point(width / 4 + 300, height / 2 + 50))],
 
         // Light and its projection on the ground.
         [ControlPointType.LIGHT, new ControlPoint(new Point(width / 5, height / 4))],
-        [ControlPointType.LIGHT_DROP, new ControlPoint(new Point(width / 5, height * 3 / 4))],
+        [ControlPointType.LIGHT_DROP, new ControlPoint(new Point(width / 5, height * .60))],
     ]), undefined, undefined);
 
     let config = new Config(width, height, controlPoints);
-    config.draw(g);
+    config.draw(g, rc);
 
     canvas.addEventListener("mousedown", e => {
         const cps = config.controlPoints.select(new Point(e.x, e.y));
         config  = new Config(width, height, cps);
-        config.draw(g);
+        config.draw(g, rc);
     });
     canvas.addEventListener("mouseup", () => {
         const cps = config.controlPoints.deselect();
         config  = new Config(width, height, cps);
-        config.draw(g);
+        config.draw(g, rc);
     });
     canvas.addEventListener("mousemove", e => {
         if (config.controlPoints.selected !== undefined) {
             const cps = config.controlPoints.moveTo(new Point(e.x, e.y));
             config  = new Config(width, height, cps);
-            config.draw(g);
+            config.draw(g, rc);
         }
-    })
+    });
+    window.addEventListener("resize", () => {
+        width = window.innerWidth;
+        height = window.innerHeight;
+        canvas.width = width;
+        canvas.height = height;
+
+        config  = new Config(width, height, config.controlPoints);
+        config.draw(g, rc);
+    });
 }
 
 main();
