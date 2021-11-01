@@ -72,29 +72,24 @@ class Point {
     return new Point(this.x - other.x, this.y - other.y);
   }
 }
-const _Vector = class {
+class Vector {
   constructor(x, y) {
     this.x = x;
     this.y = y;
   }
   times(m) {
-    return new _Vector(this.x * m, this.y * m);
+    return new Vector(this.x * m, this.y * m);
   }
   length() {
     return Math.sqrt(this.x * this.x + this.y * this.y);
   }
-};
-let Vector = _Vector;
-Vector.UP = new _Vector(0, -100);
+}
 class Line {
   constructor(begin, end, stopAtBegin, stopAtEnd) {
     this.begin = begin;
     this.end = end;
     this.stopAtBegin = stopAtBegin;
     this.stopAtEnd = stopAtEnd;
-  }
-  static upFrom(p) {
-    return new Line(p, p.plus(Vector.UP), true, true);
   }
   draw(g, rc, dark) {
     const r = this.end.vectorFrom(this.begin);
@@ -254,8 +249,8 @@ class Config {
   }
 }
 function main() {
-  const width = window.innerWidth;
-  const height = window.innerHeight;
+  let width = window.innerWidth;
+  let height = window.innerHeight;
   const canvas = document.querySelector("canvas");
   canvas.width = width;
   canvas.height = height;
@@ -289,6 +284,14 @@ function main() {
       config = new Config(width, height, cps);
       config.draw(g, rc);
     }
+  });
+  window.addEventListener("resize", () => {
+    width = window.innerWidth;
+    height = window.innerHeight;
+    canvas.width = width;
+    canvas.height = height;
+    config = new Config(width, height, config.controlPoints);
+    config.draw(g, rc);
   });
 }
 main();

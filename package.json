@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
       "start": "npx snowpack dev",
-      "build": "npx snowpack build"
+      "build": "npx snowpack build && touch docs/.nojekyll"
   },
   "keywords": [],
   "author": "Lawrence Kesteloot <lk@teamten.com> (https://www.teamten.com/lawrence/)",
